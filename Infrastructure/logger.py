@@ -3,7 +3,7 @@ from datetime import datetime
 
 from loguru import logger as _logger  # 导入loguru库并重命名为_logger
 
-from app.config import PROJECT_ROOT  # 从项目配置中导入项目根目录
+from Infrastructure.config import PROJECT_ROOT  # 从项目配置中导入项目根目录
 
 
 _print_level = "INFO"  # 默认打印日志级别

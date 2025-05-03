@@ -18,11 +18,11 @@ from tenacity import (  # 重试库，用于API调用失败时自动重试
     wait_random_exponential,
 )
 
-from app.bedrock import BedrockClient  # AWS Bedrock客户端
-from app.config import LLMSettings, config  # 配置相关
-from app.exceptions import TokenLimitExceeded  # 自定义异常
-from app.logger import logger  # 日志记录器
-from app.schema import (  # 数据模型和类型定义
+from Infrastructure.bedrock import BedrockClient  # AWS Bedrock客户端
+from Infrastructure.config import LLMSettings, config  # 配置相关
+from Infrastructure.exceptions import TokenLimitExceeded  # 自定义异常
+from Infrastructure.logger import logger  # 日志记录器
+from Infrastructure.schema import (  # 数据模型和类型定义
     ROLE_VALUES,
     TOOL_CHOICE_TYPE,
     TOOL_CHOICE_VALUES,

@@ -4,8 +4,8 @@ from typing import Optional
 from pydantic import Field
 
 from Agent.Base import BaseAgent  # 从基础模块导入代理基类
-from app.llm import LLM  # 导入语言模型接口
-from app.schema import AgentState, Memory  # 导入代理状态和记忆相关类型
+from llm import LLM  # 导入语言模型接口
+from Infrastructure.schema import AgentState, Memory  # 导入代理状态和记忆相关类型
 
 
 class ReActAgent(BaseAgent, ABC):

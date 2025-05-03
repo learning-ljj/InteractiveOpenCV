@@ -5,9 +5,9 @@ from typing import List, Optional  # 类型注解支持
 from pydantic import BaseModel, Field, model_validator  # 数据验证和设置管理
 
 from llm import LLM  # 语言模型接口
-from app.logger import logger  # 日志记录器
-from app.sandbox.client import SANDBOX_CLIENT  # 沙箱环境客户端
-from app.schema import ROLE_TYPE, AgentState, Memory, Message  # 类型定义和数据结构
+from Infrastructure.logger import logger  # 日志记录器
+from Infrastructure.sandbox.client import SANDBOX_CLIENT  # 沙箱环境客户端
+from Infrastructure.schema import ROLE_TYPE, AgentState, Memory, Message  # 类型定义和数据结构
 
 
 class BaseAgent(BaseModel, ABC):
@@ -130,8 +130,8 @@ class BaseAgent(BaseModel, ABC):
                 step_result = await self.step()
 
                 # 未完成修改
-                # if self.is_stuck():
-                #     self.handle_stuck_state()
+                if self.is_stuck():
+                     self.handle_stuck_state()
 
                 results.append(f"步骤 {self.current_step}: {step_result}")
 
@@ -153,33 +153,33 @@ class BaseAgent(BaseModel, ABC):
     # 未完成修改
     """原有卡顿状态的检测是检测完全相同的语句，这样会导致无法判断是否是真正意义上的卡顿
     ，卡顿状态的处理是否可以先总结出之前的流程中卡在哪些地方，然后利用LLM修改策略？"""
-    # def handle_stuck_state(self):
-    #     """处理卡顿状态
+    def handle_stuck_state(self):
+        """处理卡顿状态
         
-    #     通过添加提示词来改变策略
-    #     """
-    #     stuck_prompt = "\
-    #     检测到重复响应。请考虑新的策略，避免重复已经尝试过的无效路径。"
-    #     self.next_step_prompt = f"{stuck_prompt}\n{self.next_step_prompt}"
-    #     logger.warning(f"代理检测到卡顿状态。已添加提示: {stuck_prompt}")
+        通过添加提示词来改变策略
+        """
+        stuck_prompt = "\
+        检测到重复响应。请考虑新的策略，避免重复已经尝试过的无效路径。"
+        self.next_step_prompt = f"{stuck_prompt}\n{self.next_step_prompt}"
+        logger.warning(f"代理检测到卡顿状态。已添加提示: {stuck_prompt}")
 
-    # def is_stuck(self) -> bool:
-    #     """通过检测重复内容判断代理是否卡在循环中"""
-    #     if len(self.memory.messages) < 2:
-    #         return False
+    def is_stuck(self) -> bool:
+        """通过检测重复内容判断代理是否卡在循环中"""
+        if len(self.memory.messages) < 2:
+            return False
 
-    #     last_message = self.memory.messages[-1]
-    #     if not last_message.content:
-    #         return False
+        last_message = self.memory.messages[-1]
+        if not last_message.content:
+            return False
 
-    #     # 计算相同内容出现的次数
-    #     duplicate_count = sum(
-    #         1
-    #         for msg in reversed(self.memory.messages[:-1])
-    #         if msg.role == "assistant" and msg.content == last_message.content
-    #     )
+        # 计算相同内容出现的次数
+        duplicate_count = sum(
+            1
+            for msg in reversed(self.memory.messages[:-1])
+            if msg.role == "assistant" and msg.content == last_message.content
+        )
 
-    #     return duplicate_count >= self.duplicate_threshold
+        return duplicate_count >= self.duplicate_threshold
 
     @property
     def messages(self) -> List[Message]:

@@ -2,18 +2,18 @@ from typing import Dict, List, Optional
 from pydantic import Field, model_validator
 
 # 导入各种工具和辅助类
-from app.agent.browser import BrowserContextHelper  # 浏览器上下文助手
+from Agent.browser import BrowserContextHelper  # 浏览器上下文助手
 from Agent.ToolCall import ToolCallAgent  # 工具调用代理基类
-from app.config import config  # 应用配置
-from app.logger import logger  # 日志记录器
-from app.prompt.manus import NEXT_STEP_PROMPT, SYSTEM_PROMPT  # 提示模板
-from app.tool import Terminate, ToolCollection  # 工具集合和终止工具
-from app.tool.ask_human import AskHuman  # 询问人类工具
-from app.tool.browser_use_tool import BrowserUseTool  # 浏览器使用工具
-from app.tool.mcp import MCPClients, MCPClientTool  # MCP客户端相关
-from app.tool.python_execute import PythonExecute  # Python执行工具
-from app.tool.str_replace_editor import StrReplaceEditor  # 字符串替换编辑器工具
-from app.tool.web_search import WebSearch  # 网络搜索工具
+from Infrastructure.config import config  # 应用配置
+from Infrastructure.logger import logger  # 日志记录器
+from prompt.manus import NEXT_STEP_PROMPT, SYSTEM_PROMPT  # 提示模板
+from tool import Terminate, ToolCollection  # 工具集合和终止工具
+from tool.ask_human import AskHuman  # 询问人类工具
+from tool.browser_use_tool import BrowserUseTool  # 浏览器使用工具
+from tool.mcp import MCPClients, MCPClientTool  # MCP客户端相关
+from tool.python_execute import PythonExecute  # Python执行工具
+from tool.str_replace_editor import StrReplaceEditor  # 字符串替换编辑器工具
+from tool.web_search import WebSearch  # 网络搜索工具
 
 
 class Manus(ToolCallAgent):
