@@ -62,7 +62,7 @@ class ToolCallAgent(ReActAgent):
         返回:
             bool: 是否需要执行行动(True)或只需思考(False)
         """
-        # 如果有下一步提示词，添加用户消息
+        # 如果有下一步提示词，添加消息：角色为user，内容为Manus的下一步提示词
         if self.next_step_prompt:
             user_msg = Message.user_message(self.next_step_prompt)
             self.messages += [user_msg]
@@ -97,16 +97,19 @@ class ToolCallAgent(ReActAgent):
                 return False
             raise
 
-        # 解析响应中的工具调用和内容
+        # 解析响应中的工具调用和内容，当LLM调用工具时，content为空，只返回tool_calls
         self.tool_calls = tool_calls = (
             response.tool_calls if response and response.tool_calls else []
         )
         content = response.content if response and response.content else ""
 
-        # 记录响应信息
-        logger.info(f"✨ {self.name}的思考内容: {content}")
-        logger.info(f"🛠️ {self.name}选择了{len(tool_calls) if tool_calls else 0}个工具")
+        # 记录响应信息（只在有内容时显示）
+        if content:
+            logger.info(f"✨ {self.name}的思考内容: {content}")
+        
+        # 只在有工具调用时显示工具信息
         if tool_calls:
+            logger.info(f"🛠️ {self.name}选择了{len(tool_calls)}个工具")
             logger.info(f"🧰 准备使用的工具: {[call.function.name for call in tool_calls]}")
             logger.info(f"🔧 工具参数: {tool_calls[0].function.arguments}")
 
@@ -211,7 +214,28 @@ class ToolCallAgent(ReActAgent):
             # 解析参数
             args = json.loads(command.function.arguments or "{}")
 
-            # 执行工具
+            # 添加调试日志
+            logger.debug(f"原始参数: {args}")
+
+            # 确保参数可序列化，处理Union类型
+            # 安全处理参数类型
+            safe_args = {}
+            for k, v in args.items():
+                try:
+                    if hasattr(v, '__origin__') and isinstance(getattr(v, '__origin__'), type) and v.__origin__ == Union:
+                        safe_args[k] = str(v)
+                        logger.debug(f"转换Union类型参数: {k}={v}")
+                    else:
+                        safe_args[k] = v
+                except Exception as e:
+                    logger.warning(f"参数{k}类型检查异常: {str(e)}")
+                    safe_args[k] = str(v)  # 降级处理
+            
+            args = safe_args
+
+            # 添加转换后日志
+            logger.debug(f"转换后参数: {args}") 
+            
             logger.info(f"🔧 正在激活工具: '{name}'...")
             result = await self.available_tools.execute(name=name, tool_input=args)
 

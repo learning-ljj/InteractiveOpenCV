@@ -59,22 +59,36 @@ class BaseAgent(BaseModel, ABC):
 
     @asynccontextmanager
     async def state_context(self, new_state: AgentState):
-        """状态转换的上下文管理器
+        """代理状态管理的上下文管理器
         
-        确保状态转换的安全性和异常处理
+        功能：
+            安全地切换代理状态，确保异常情况下能正确恢复状态
+            使用async with语法进行状态管理
         """
+        # 验证新状态是否合法
         if not isinstance(new_state, AgentState):
-            raise ValueError(f"无效状态: {new_state}")
+            raise ValueError(f"无效的代理状态: {new_state}")
 
+        # 保存当前状态以便后续恢复
         previous_state = self.state
+        
+        # 更新为新的状态
         self.state = new_state
+        
         try:
+            # 在此上下文内执行代码
             yield
+            
         except Exception as e:
-            self.state = AgentState.ERROR  # 出错时转为ERROR状态
-            raise e
+            # 发生异常时切换到错误状态
+            self.state = AgentState.ERROR
+            logger.error(f"代理状态切换时发生异常: {str(e)}")
+            raise
+            
         finally:
-            self.state = previous_state  # 恢复之前状态
+            # 无论是否发生异常，最终都恢复原始状态
+            self.state = previous_state
+            logger.debug(f"代理状态已恢复为: {previous_state}")
 
     def update_memory(
         self,
@@ -85,20 +99,31 @@ class BaseAgent(BaseModel, ABC):
     ) -> None:
         """向代理记忆中添加消息
         
-        根据角色类型创建不同类型的消息对象
+        参数:
+            role: 消息角色类型(用户/系统/助手/工具)
+            content: 消息文本内容
+            base64_image: 可选，base64编码的图像数据
+            **kwargs: 额外参数，主要用于工具消息
+            
+        功能:
+            根据角色类型创建对应类型的消息对象并添加到记忆存储中
         """
+        # 消息类型映射字典，将不同角色映射到对应的消息构造方法
         message_map = {
-            "user": Message.user_message,  # 用户消息
-            "system": Message.system_message,  # 系统消息
-            "assistant": Message.assistant_message,  # 助手消息
-            "tool": lambda content, **kw: Message.tool_message(content, **kw),  # 工具消息
+            "user": Message.user_message,  # 用户消息构造方法，用于创建用户角色消息
+            "system": Message.system_message,  # 系统消息构造方法，用于创建系统角色消息 
+            "assistant": Message.assistant_message,  # 助手消息构造方法，用于创建助手角色消息
+            "tool": lambda content, **kw: Message.tool_message(content, **kw),  # 工具消息构造方法，使用lambda包装以支持动态参数
         }
 
+        # 检查角色是否有效
         if role not in message_map:
             raise ValueError(f"不支持的消息角色: {role}")
 
-        # 根据角色创建消息对象
+        # 准备消息构造参数
         kwargs = {"base64_image": base64_image, **(kwargs if role == "tool" else {})}
+        
+        # 创建消息对象并添加到记忆
         self.memory.add_message(message_map[role](content, **kwargs))
 
     # 新添加的方法，未完成修改
@@ -181,12 +206,12 @@ class BaseAgent(BaseModel, ABC):
 
         return duplicate_count >= self.duplicate_threshold
 
-    @property
+    @property # 方法转换为只读属性，允许像访问属性一样访问方法，例如：agent.messages = [msg1, msg2]，而不是agent.messages()
     def messages(self) -> List[Message]:
         """获取代理记忆中的所有消息"""
         return self.memory.messages
 
-    @messages.setter
+    @messages.setter # 为属性创建设置器(setter)，允许通过赋值修改属性值，例如：agent.messages = [msg1, msg2]，而不是agent.messages([msg1, msg2])
     def messages(self, value: List[Message]):
         """设置代理记忆中的消息列表"""
         self.memory.messages = value
