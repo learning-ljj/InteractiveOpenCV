@@ -51,7 +51,9 @@ class PlanningFlow(BaseFlow):
     current_step_index: Optional[int] = None  # 当前执行步骤索引
 
     def __init__(
-        self, agents: Union[BaseAgent, List[BaseAgent], Dict[str, BaseAgent]], **data
+        self, 
+        agents: Union[BaseAgent, List[BaseAgent], Dict[str, BaseAgent]], 
+        **data
     ):
         """初始化规划流程
         
@@ -221,15 +223,15 @@ class PlanningFlow(BaseFlow):
         try:
             # 从规划工具存储中获取计划数据
             plan_data = self.planning_tool.plans[self.active_plan_id]
-            steps = plan_data.get("steps", [])
-            step_statuses = plan_data.get("step_statuses", [])
+            steps = plan_data.get("steps", []) # 字典的 get() 方法安全获取键的对应值
+            step_statuses = plan_data.get("step_statuses", []) # 第一个参数 "steps" 是要查找的键, 第二个参数 [] 是默认值,当键不存在时返回空列表
 
             # 查找第一个未完成的步骤
-            for i, step in enumerate(steps):
-                if i >= len(step_statuses):
-                    status = PlanStepStatus.NOT_STARTED.value
+            for i, step in enumerate(steps):  # 遍历所有步骤，i是索引，step是步骤内容
+                if i >= len(step_statuses):   # 如果当前索引超出状态列表范围
+                    status = PlanStepStatus.NOT_STARTED.value  # 默认设为"未开始"状态
                 else:
-                    status = step_statuses[i]
+                    status = step_statuses[i]  # 否则使用状态列表中对应的状态
 
                 if status in PlanStepStatus.get_active_statuses():
                     # 提取步骤信息

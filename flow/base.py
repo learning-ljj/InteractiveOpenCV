@@ -18,7 +18,9 @@ class BaseFlow(BaseModel, ABC):
         arbitrary_types_allowed = True  # 允许任意类型
 
     def __init__(
-        self, agents: Union[BaseAgent, List[BaseAgent], Dict[str, BaseAgent]], **data
+        self, 
+        agents: Union[BaseAgent, List[BaseAgent], Dict[str, BaseAgent]], 
+        **data
     ):
         """初始化流程实例
         
@@ -36,7 +38,7 @@ class BaseFlow(BaseModel, ABC):
 
         # 如果未指定主代理，使用第一个代理作为主代理
         primary_key = data.get("primary_agent_key")
-        if not primary_key and agents_dict:
+        if not primary_key and agents_dict: # 若 未指定主代理 且 存在代理字典，注意优先级
             primary_key = next(iter(agents_dict))
             data["primary_agent_key"] = primary_key
 
