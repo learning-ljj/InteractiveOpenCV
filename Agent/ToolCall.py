@@ -63,6 +63,7 @@ class ToolCallAgent(ReActAgent):
             bool: 是否需要执行行动(True)或只需思考(False)
         """
         # 如果有下一步提示词，添加消息：角色为user，内容为Manus的下一步提示词
+        # （注意：实际调用think()在Manus，最后返回的父类ToolCallAgent的think，所以这里的self是Manus）
         if self.next_step_prompt:
             user_msg = Message.user_message(self.next_step_prompt)
             self.messages += [user_msg]
