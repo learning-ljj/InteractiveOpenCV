@@ -146,6 +146,7 @@ class Manus(ToolCallAgent):
         if self._initialized:
             await self.disconnect_mcp_server()
             self._initialized = False
+        await super().cleanup()  # 调用父类清理方法
 
     async def think(self) -> bool:
         """处理当前状态并决定下一步操作"""

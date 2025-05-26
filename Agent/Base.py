@@ -58,37 +58,75 @@ class BaseAgent(BaseModel, ABC):
         return self
 
     @asynccontextmanager
-    async def state_context(self, new_state: AgentState):
-        """代理状态管理的上下文管理器
+    async def state_context(self, 
+                          new_state: AgentState, 
+                          should_reset: bool = True,
+                          reset_on_error: bool = True):
+        """代理状态上下文管理器，用于安全地切换代理状态
         
-        功能：
-            安全地切换代理状态，确保异常情况下能正确恢复状态
-            使用async with语法进行状态管理
-        """
-        # 验证新状态是否合法
-        if not isinstance(new_state, AgentState):
-            raise ValueError(f"无效的代理状态: {new_state}")
+        参数说明：
+            new_state (AgentState): 
+                必须传入的目标状态，必须是预定义的AgentState枚举值
+                示例: AgentState.RUNNING, AgentState.IDLE
 
-        # 保存当前状态以便后续恢复
-        previous_state = self.state
-        
-        # 更新为新的状态
-        self.state = new_state
+            should_reset (bool, optional): 
+                当任务完成时是否自动重置为初始状态（默认False）
+                - True: 任务完成后将状态重置为AgentState.IDLE
+                - False: 保持AgentState.FINISHED状态
+                注意：若参数为True，运行run_flow：
+                    当terminate将Agent状态设为finished时，
+                        state_context会复原为待机状态IDLE，
+                        导致flow的execute中的while循环继续运行，不会重置步数
+
+            reset_on_error (bool, optional): 
+                发生未处理异常时是否恢复原始状态（默认True）
+                - True: 出现异常时恢复进入上下文前的状态
+                - False: 出现异常时保持AgentState.ERROR状态
+
+        状态处理优先级（从上到下依次判断）：
+            1. 发生未捕获的异常 → 根据reset_on_error决定行为
+            2. 达到FINISHED状态 → 根据should_reset决定是否重置
+            3. 其他正常情况 → 自动恢复原始状态
+        """
+        # 参数验证
+        if not isinstance(new_state, AgentState):
+            raise ValueError(f"无效状态类型，期望AgentState枚举，实际收到: {type(new_state)}")
+
+        # 保存原始状态用于可能的恢复
+        original_state = self.state
         
         try:
-            # 在此上下文内执行代码
+            # 应用新状态
+            self.state = new_state
+            logger.debug(f"状态已切换: {original_state} → {new_state}")
+            
+            # 移交控制权给with块
             yield
             
+            # 处理正常完成情况
+            if self.state == AgentState.FINISHED:
+                if should_reset:
+                    self.state = AgentState.IDLE
+                    logger.info("任务完成并重置为待机状态")
+                else:
+                    logger.info("任务完成，保持FINISHED状态")
+            else:
+                # 非完成状态恢复原始状态
+                self.state = original_state
+                logger.info(f"恢复进入前状态: {original_state}")
+                
         except Exception as e:
-            # 发生异常时切换到错误状态
-            self.state = AgentState.ERROR
-            logger.error(f"代理状态切换时发生异常: {str(e)}")
-            raise
+            # 异常处理
+            logger.error(f"执行过程中发生异常: {type(e).__name__}: {str(e)}")
             
-        finally:
-            # 无论是否发生异常，最终都恢复原始状态
-            self.state = previous_state
-            logger.debug(f"代理状态已恢复为: {previous_state}")
+            if reset_on_error:
+                self.state = original_state
+                logger.warning(f"已恢复原始状态: {original_state}")
+            else:
+                self.state = AgentState.ERROR
+                logger.error("Agent保持错误状态，需要人工干预")
+            
+            raise  # 重新抛出异常
 
     def update_memory(
         self,
@@ -159,6 +197,10 @@ class BaseAgent(BaseModel, ABC):
                      self.handle_stuck_state()
 
                 results.append(f"步骤 {self.current_step}: {step_result}")
+            
+            if self.state == AgentState.FINISHED:
+                self.current_step = 0 # 重置步数
+                self.memory.clear()  # 清理记忆
 
             if self.current_step >= self.max_steps:
                 self.current_step = 0

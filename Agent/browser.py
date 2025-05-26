@@ -25,6 +25,18 @@ class BrowserContextHelper:
         """
         self.agent = agent
         self._current_base64_image: Optional[str] = None  # 当前浏览器截图缓存
+        self._initialized = False  # 初始化状态标记
+    
+    async def ensure_initialized(self):
+        """确保浏览器上下文已初始化"""
+        if not self._initialized:
+            browser_tool = self.agent.available_tools.get_tool(BrowserUseTool().name)
+            if browser_tool and hasattr(browser_tool, "initialize"):
+                await browser_tool.initialize()
+                self._initialized = True
+                logger.debug("浏览器上下文已初始化")
+            else:
+                logger.warning("浏览器工具不可用或缺少初始化方法")
 
     async def get_browser_state(self) -> Optional[dict]:
         """获取当前浏览器状态

@@ -1,8 +1,10 @@
 import asyncio
 import base64
 import json
+from Infrastructure.logger import logger
 from typing import Generic, Optional, TypeVar
 
+# 导入浏览器自动化相关模块
 from browser_use import Browser as BrowserUseBrowser
 from browser_use import BrowserConfig
 from browser_use.browser.context import BrowserContext, BrowserContextConfig
@@ -10,12 +12,13 @@ from browser_use.dom.service import DomService
 from pydantic import Field, field_validator
 from pydantic_core.core_schema import ValidationInfo
 
+# 导入项目内部模块
 from Infrastructure.config import config
 from llm import LLM
 from tool.base import BaseTool, ToolResult
 from tool.web_search import WebSearch
 
-
+# 浏览器工具的功能描述
 _BROWSER_DESCRIPTION = """\
 A powerful browser automation tool that allows interaction with web pages through various actions.
 * This tool provides commands for controlling a browser session, navigating web pages, and extracting information
@@ -33,12 +36,17 @@ Key capabilities include:
 Note: When using element indices, refer to the numbered elements shown in the current browser state.
 """
 
+# 定义泛型类型变量
 Context = TypeVar("Context")
 
-
 class BrowserUseTool(BaseTool, Generic[Context]):
+    """浏览器自动化工具类，封装了常见的网页操作功能"""
+    
+    # 工具基本信息
     name: str = "browser_use"
     description: str = _BROWSER_DESCRIPTION
+    
+    # 定义工具参数结构
     parameters: dict = {
         "type": "object",
         "properties": {
@@ -134,26 +142,43 @@ class BrowserUseTool(BaseTool, Generic[Context]):
 
     @field_validator("parameters", mode="before")
     def validate_parameters(cls, v: dict, info: ValidationInfo) -> dict:
+        """验证工具参数是否有效"""
         if not v:
-            raise ValueError("Parameters cannot be empty")
+            raise ValueError("工具参数不能为空")
         return v
+    
+    async def initialize(self):
+        """初始化浏览器上下文"""
+        if self.context is None:
+            try:
+                await self._ensure_browser_initialized()
+                logger.info("浏览器上下文初始化成功")
+                return True
+            except Exception as e:
+                logger.error(f"浏览器初始化失败: {str(e)}")
+                return False
+        return True
+
 
     async def _ensure_browser_initialized(self) -> BrowserContext:
-        """Ensure browser and context are initialized."""
+        """确保浏览器和上下文已初始化"""
         if self.browser is None:
+            # 初始化浏览器配置
             browser_config_kwargs = {"headless": False, "disable_security": True}
-
+            
+            # 应用配置中的浏览器设置
             if config.browser_config:
                 from browser_use.browser.browser import ProxySettings
-
-                # handle proxy settings.
+                
+                # 处理代理设置
                 if config.browser_config.proxy and config.browser_config.proxy.server:
                     browser_config_kwargs["proxy"] = ProxySettings(
                         server=config.browser_config.proxy.server,
                         username=config.browser_config.proxy.username,
                         password=config.browser_config.proxy.password,
                     )
-
+                
+                # 应用其他浏览器配置属性
                 browser_attrs = [
                     "headless",
                     "disable_security",
@@ -162,26 +187,26 @@ class BrowserUseTool(BaseTool, Generic[Context]):
                     "wss_url",
                     "cdp_url",
                 ]
-
                 for attr in browser_attrs:
                     value = getattr(config.browser_config, attr, None)
                     if value is not None:
                         if not isinstance(value, list) or value:
                             browser_config_kwargs[attr] = value
 
+            # 创建浏览器实例
             self.browser = BrowserUseBrowser(BrowserConfig(**browser_config_kwargs))
 
         if self.context is None:
+            # 初始化浏览器上下文配置
             context_config = BrowserContextConfig()
-
-            # if there is context config in the config, use it.
-            if (
-                config.browser_config
-                and hasattr(config.browser_config, "new_context_config")
-                and config.browser_config.new_context_config
-            ):
+            
+            # 应用配置中的上下文设置
+            if (config.browser_config and 
+                hasattr(config.browser_config, "new_context_config") and 
+                config.browser_config.new_context_config):
                 context_config = config.browser_config.new_context_config
 
+            # 创建新上下文和DOM服务
             self.context = await self.browser.new_context(context_config)
             self.dom_service = DomService(await self.context.get_current_page())
 
@@ -202,51 +227,50 @@ class BrowserUseTool(BaseTool, Generic[Context]):
         **kwargs,
     ) -> ToolResult:
         """
-        Execute a specified browser action.
-
-        Args:
-            action: The browser action to perform
-            url: URL for navigation or new tab
-            index: Element index for click or input actions
-            text: Text for input action or search query
-            scroll_amount: Pixels to scroll for scroll action
-            tab_id: Tab ID for switch_tab action
-            query: Search query for Google search
-            goal: Extraction goal for content extraction
-            keys: Keys to send for keyboard actions
-            seconds: Seconds to wait
-            **kwargs: Additional arguments
-
-        Returns:
-            ToolResult with the action's output or error
+        执行指定的浏览器操作
+        
+        参数:
+            action: 要执行的浏览器操作类型
+            url: 用于导航或新标签页的URL
+            index: 元素索引，用于点击或输入操作
+            text: 输入文本或搜索查询
+            scroll_amount: 滚动操作的像素量
+            tab_id: 切换标签页的ID
+            query: 搜索查询
+            goal: 内容提取目标
+            keys: 要发送的键盘按键
+            seconds: 等待秒数
+            **kwargs: 其他参数
+            
+        返回:
+            ToolResult对象，包含操作输出或错误信息
         """
         async with self.lock:
             try:
+                # 确保浏览器已初始化
                 context = await self._ensure_browser_initialized()
-
-                # Get max content length from config
+                
+                # 从配置获取最大内容长度
                 max_content_length = getattr(
                     config.browser_config, "max_content_length", 2000
                 )
 
-                # Navigation actions
+                # 处理导航类操作
                 if action == "go_to_url":
                     if not url:
-                        return ToolResult(
-                            error="URL is required for 'go_to_url' action"
-                        )
+                        return ToolResult(error="'go_to_url'操作需要URL参数")
                     page = await context.get_current_page()
                     await page.goto(url)
                     await page.wait_for_load_state()
-                    return ToolResult(output=f"Navigated to {url}")
+                    return ToolResult(output=f"已导航至: {url}")
 
                 elif action == "go_back":
                     await context.go_back()
-                    return ToolResult(output="Navigated back")
+                    return ToolResult(output="已返回上一页")
 
                 elif action == "refresh":
                     await context.refresh_page()
-                    return ToolResult(output="Refreshed current page")
+                    return ToolResult(output="已刷新当前页面")
 
                 elif action == "web_search":
                     if not query:
@@ -480,8 +504,13 @@ Page content:
         self, context: Optional[BrowserContext] = None
     ) -> ToolResult:
         """
-        Get the current browser state as a ToolResult.
-        If context is not provided, uses self.context.
+        获取当前浏览器状态
+        
+        参数:
+            context: 可选浏览器上下文，如未提供则使用self.context
+            
+        返回:
+            ToolResult对象，包含浏览器状态或错误信息
         """
         try:
             # Use provided context or fall back to self.context
@@ -539,7 +568,7 @@ Page content:
             return ToolResult(error=f"Failed to get browser state: {str(e)}")
 
     async def cleanup(self):
-        """Clean up browser resources."""
+        """清理浏览器资源"""
         async with self.lock:
             if self.context is not None:
                 await self.context.close()
@@ -550,7 +579,7 @@ Page content:
                 self.browser = None
 
     def __del__(self):
-        """Ensure cleanup when object is destroyed."""
+        """对象销毁时确保清理资源"""
         if self.browser is not None or self.context is not None:
             try:
                 asyncio.run(self.cleanup())
@@ -561,7 +590,7 @@ Page content:
 
     @classmethod
     def create_with_context(cls, context: Context) -> "BrowserUseTool[Context]":
-        """Factory method to create a BrowserUseTool with a specific context."""
+        """使用特定上下文创建BrowserUseTool的工厂方法"""
         tool = cls()
         tool.tool_context = context
         return tool

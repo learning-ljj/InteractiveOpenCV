@@ -216,7 +216,7 @@ class ToolCallAgent(ReActAgent):
             args = json.loads(command.function.arguments or "{}")
 
             # 添加调试日志
-            logger.debug(f"原始参数: {args}")
+            # logger.debug(f"原始参数: {args}")
 
             # 确保参数可序列化，处理Union类型
             # 安全处理参数类型
@@ -235,7 +235,7 @@ class ToolCallAgent(ReActAgent):
             args = safe_args
 
             # 添加转换后日志
-            logger.debug(f"转换后参数: {args}") 
+            # logger.debug(f"转换后参数: {args}") 
             
             logger.info(f"🔧 正在激活工具: '{name}'...")
             result = await self.available_tools.execute(name=name, tool_input=args)
@@ -337,6 +337,12 @@ class ToolCallAgent(ReActAgent):
             str: 运行结果
         """
         try:
-            return await super().run(request)
-        finally:
+            logger.debug(f"🔄 {self.name}开始执行")
+            result = await super().run(request)
             await self.cleanup()
+            return result
+        except Exception as e:
+            logger.error(f"代理执行异常: {str(e)}")
+            raise
+        finally:
+            logger.debug(f"✨ {self.name}执行完成")

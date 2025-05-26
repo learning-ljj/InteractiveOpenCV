@@ -1,19 +1,60 @@
 # tool/planning.py
-from typing import Dict, List, Literal, Optional
+from enum import Enum
+import json
+from typing import Dict, List, Literal, Optional, Any
+
+from pydantic import BaseModel, ValidationError
 
 from Infrastructure.exceptions import ToolError
 from tool.base import BaseTool, ToolResult
 
+class Status(str, Enum):
+    """计划步骤状态枚举类"""
+    NOT_STARTED = "not_started"  # 未开始
+    IN_PROGRESS = "in_progress"  # 进行中
+    COMPLETED = "completed"  # 已完成
+    BLOCKED = "blocked"  # 已阻塞
+
+    @classmethod
+    def get_active_statuses(cls) -> list[str]:
+        """获取活动状态列表(未开始或进行中)"""
+        return [cls.NOT_STARTED.value, cls.IN_PROGRESS.value]
 
 _PLANNING_TOOL_DESCRIPTION = """
-A planning tool that allows the agent to create and manage plans for solving complex tasks.
-The tool provides functionality for creating plans, updating plan steps, and tracking progress.
+A planning tool enabling agents to create and manage multi-step plans for complex problem solving. Key features include:
+- Create new plans (with titles, detailed steps, expected outputs)
+- Update existing plans (intelligent status merging)
+- View plan lists/details (formatted output)
+- Set active plan
+- Mark step statuses (in_progress/completed/blocked)
+- Track overall progress and step-level execution details
+- Auto-detect blocked steps and execution order constraints
+Provides structured data storage, visual progress tracking, and JSON-formatted results.
 """
+"""
+一个规划工具，允许代理创建和管理用于解决复杂任务的多步骤计划。该工具支持以下功能：
+- 创建新计划（包含标题、详细步骤及预期输出）
+- 更新现有计划内容（智能合并步骤状态）
+- 查看计划列表及详细信息（支持格式化输出）
+- 设置当前活动计划
+- 标记步骤状态（进行中/已完成/阻塞）
+- 跟踪计划整体进度和步骤级执行详情
+- 自动检测阻塞步骤和执行顺序约束
+提供结构化数据存储和可视化进度跟踪，支持JSON格式结果输出。
+"""
+
+class StepInfo(BaseModel):
+    """步骤详细配置模型"""
+    description: str
+    expected_output: Optional[str] = None
+    actual_result: Optional[Any] = None
+    status: str = Status.NOT_STARTED.value  # 状态值: not_started/in_progress/completed/blocked
+    notes: str = ""
 
 
 class PlanningTool(BaseTool):
     """
-    规划工具类，用于创建和管理多步骤任务的执行计划
+    规划工具类，用于创建多步骤计划 和 管理多步骤执行计划
     """
     
     # 工具元数据定义
@@ -25,51 +66,52 @@ class PlanningTool(BaseTool):
         "type": "object",
         "properties": {
             "command": {
-                "description": "The command to execute. Available commands: create, update, list, get, set_active, mark_step, delete.",
-                "enum": [
-                    "create",
-                    "update",
-                    "list",
-                    "get",
-                    "set_active",
-                    "mark_step",
-                    "delete",
-                ],
-                "type": "string",
+                "description": "Operation command to execute. Available: create, update, list, get, set_active, mark_step, delete",
+                "enum": ["create", "update", "list", "get", "set_active", "mark_step", "delete"],
+                "type": "string"
             },
             "plan_id": {
-                "description": "Unique identifier for the plan. Required for create, update, set_active, and delete commands. Optional for get and mark_step (uses active plan if not specified).",
-                "type": "string",
+                "description": "Unique plan identifier. Required for create/update/set_active/delete, optional for get/mark_step (uses active plan)",
+                "type": "string"
             },
             "title": {
-                "description": "Title for the plan. Required for create command, optional for update command.",
-                "type": "string",
+                "description": "Plan title (required for create, optional for update)",
+                "type": "string"
             },
             "steps": {
-                "description": "List of plan steps. Required for create command, optional for update command.",
+                "description": "List of plan steps with descriptions and expected outputs (required for create, optional for update)",
                 "type": "array",
-                "items": {"type": "string"},
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "description": {"type": "string", "description": "Step description"},
+                        "expected_output": {"type": "string", "description": "Expected completion outcome"},
+                        "notes": {"type": "string", "description": "Additional notes"}
+                    },
+                    "required": ["description"],
+                    "additionalProperties": False
+                }
             },
             "step_index": {
-                "description": "Index of the step to update (0-based). Required for mark_step command.",
-                "type": "integer",
+                "description": "Step index to operate on (0-based, required for mark_step)",
+                "type": "integer"
             },
             "step_status": {
-                "description": "Status to set for a step. Used with mark_step command.",
+                "description": "Target status for step (used with mark_step)",
                 "enum": ["not_started", "in_progress", "completed", "blocked"],
-                "type": "string",
+                "type": "string"
             },
             "step_notes": {
-                "description": "Additional notes for a step. Optional for mark_step command.",
-                "type": "string",
-            },
+                "description": "Additional notes for step (optional with mark_step)",
+                "type": "string"
+            }
         },
         "required": ["command"],
-        "additionalProperties": False,
+        "additionalProperties": False
     }
 
     # 计划存储结构
-    plans: dict = {}  # 计划仓库，格式为字典: {plan_id: plan_data}
+    plans: Dict[str, Dict] = {}  # 所有计划的存储仓库，格式为嵌套字典: {plan_id: {plan_data}}
     _current_plan_id: Optional[str] = None  # 当前活动计划ID，用于简化操作
 
     async def execute(
@@ -80,27 +122,29 @@ class PlanningTool(BaseTool):
         ],
         plan_id: Optional[str] = None,
         title: Optional[str] = None,
-        steps: Optional[List[str]] = None,
+        steps: Optional[List[dict]] = None,
         step_index: Optional[int] = None,
-        step_status: Optional[
-            Literal["not_started", "in_progress", "completed", "blocked"]
-        ] = None,
+        step_status: Optional[Literal[
+            Status.NOT_STARTED.value, 
+            Status.IN_PROGRESS.value, 
+            Status.COMPLETED.value, 
+            Status.BLOCKED.value
+        ]] = None,
         step_notes: Optional[str] = None,
         **kwargs,
     ):
         """
-        执行规划工具命令
+        PlanningTool的执行入口，根据命令执行不同的操作
         
         参数:
             command: 要执行的操作
             plan_id: 计划的唯一标识符
             title: 计划标题
-            steps: 计划步骤列表
+            steps: 计划步骤字典列表 (修改后) # 原注释为"计划步骤列表"
             step_index: 步骤索引
-            step_status: 步骤状态
+            step_status: 步骤状态（使用Status常量）
             step_notes: 步骤备注
         """
-
         if command == "create":
             return self._create_plan(plan_id, title, steps)
         elif command == "update":
@@ -120,97 +164,143 @@ class PlanningTool(BaseTool):
                 f"无法识别的命令: {command}。允许的命令有: create, update, list, get, set_active, mark_step, delete"
             )
 
-    def _create_plan(self, plan_id: str, title: str, steps: List[str]) -> ToolResult:
+    def _create_plan(
+            self, 
+            plan_id: str, 
+            title: str, 
+            steps: List[dict],
+    ) -> ToolResult:
         """
-        创建新计划内部实现
+        创建新计划
         逻辑流程:
-        1. 参数校验 → 2. 初始化数据结构 → 3. 存储计划 → 4. 设为活动计划
+        1. 参数校验 → 2. 构建步骤对象 → 3. 存储计划 → 4. 设为活动计划 → 5. 返回结果
         """
-        # 参数有效性检查
+        # 参数校验
         if not plan_id:
             raise ToolError("create命令需要plan_id参数")
-
         if plan_id in self.plans:
             raise ToolError(
                 f"计划ID '{plan_id}'已存在。使用'update'命令修改现有计划"
             )
-
         if not title:
             raise ToolError("create命令需要title参数")
-
         if (
             not steps
             or not isinstance(steps, list)
-            or not all(isinstance(step, str) for step in steps)
+            or not all(isinstance(step, dict) for step in steps)
         ):
             raise ToolError(
-                "create命令需要steps参数，且必须是非空字符串列表"
+                "create命令需要steps参数，且必须是非空字典列表"
             )
+        
+        # 构建步骤对象
+        step_objects = []
+        for i, step in enumerate(steps):
+            try:
+                step_obj = StepInfo(**step)
+                step_objects.append(step_obj)
+            except ValidationError as e:
+                raise ToolError(f"步骤{i}配置错误: {str(e)}")        
 
-        # 创建新计划并初始化步骤状态
+        # 创建计划结构
         plan = {
-            "plan_id": plan_id,  # 计划唯一标识
-            "title": title,      # 人类可读标题
-            "steps": steps,      # 步骤文本列表
-            "step_statuses": ["not_started"] * len(steps),  # 初始化所有步骤为未开始
-            "step_notes": [""] * len(steps)  # 初始化空备注
+            "plan_id": plan_id,         # 计划唯一标识
+            "title": title,             # 标题
+            "steps": step_objects,      # 列表（各个元素为StepInfo对象）
+            "execution_log": ""         # 初始化执行日志
         }
 
         self.plans[plan_id] = plan
-        self._current_plan_id = plan_id  # Set as active plan
+        self._current_plan_id = plan_id  # 设为活动计划
 
         return ToolResult(
             output=f"计划创建成功，ID: {plan_id}\n\n{self._format_plan(plan)}"
         )
 
-    def _update_plan(self, plan_id: str, title: Optional[str], steps: Optional[List[str]]) -> ToolResult:
+    def _update_plan(
+            self, 
+            plan_id: str, 
+            title: Optional[str], 
+            steps: Optional[List[dict]]
+    ) -> ToolResult:
         """
-        更新计划实现要点:
+        更新计划
+        逻辑流程:
+        1. 校验planID → 2. 更新标题 → 3. 更新步骤 → 4. 返回结果
+        实现要点:
         - 标题更新: 直接替换
         - 步骤更新: 智能合并状态和备注
            - 位置相同的未修改步骤保留原状态
            - 新增/修改的步骤重置为未开始状态
         """
+        # 参数校验
         if not plan_id:
             raise ToolError("update命令需要plan_id参数")
-
         if plan_id not in self.plans:
             raise ToolError(f"找不到ID为 {plan_id} 的计划")
-
         plan = self.plans[plan_id]
 
+        # 更新标题
         if title:
             plan["title"] = title
 
+        # 更新步骤内容
         if steps:
-            if not isinstance(steps, list) or not all(
-                isinstance(step, str) for step in steps
-            ):
-                raise ToolError(
-                    "update命令的steps参数必须是字符串列表"
-                )
+            # 参数校验
+            if not isinstance(steps, list) or not all(isinstance(step, StepInfo) for step in steps):
+                raise ToolError("update命令的steps参数必须是StepInfo对象列表")
 
-            # 保留未修改步骤的状态和备注
+            # 步骤1: 提取旧步骤的状态和备注
             old_steps = plan["steps"]
-            old_statuses = plan["step_statuses"]
-            old_notes = plan["step_notes"]
+            old_statuses = [s.status for s in plan["steps"]]
+            old_notes = [s.notes for s in plan["steps"]]
+            
+            # 步骤2: 初始化新状态列表，保留原有状态到新步骤长度
+            new_statuses = old_statuses[:len(steps)]  # 截取旧状态到新steps长度
+            new_notes = old_notes[:len(steps)]        # 截取旧备注到新steps长度
 
-            # 创建新的状态和备注列表
-            new_statuses = []
-            new_notes = []
+            # 步骤3: 补充新步骤的默认状态(当新steps比旧steps长时)
+            while len(new_statuses) < len(steps):
+                new_statuses.append(Status.NOT_STARTED.value)  # 填充默认状态
+                new_notes.append("")                     # 填充空备注
 
-            for i, step in enumerate(steps):
-                # 如果步骤在相同位置且未修改，保留原状态和备注
-                if i < len(old_steps) and step == old_steps[i]:
-                    new_statuses.append(old_statuses[i])
-                    new_notes.append(old_notes[i])
+            # 创建新步骤列表
+            new_steps = []
+        # 智能合并步骤状态
+        for i, new_step in enumerate(steps):
+            # 转换为字典，用于比较（排除状态相关字段）
+            new_dict = new_step.dict(exclude={"status", "notes", "actual_result"})
+            
+            # 检查是否存在可继承状态的旧步骤
+            if i < len(old_steps):
+                old_step = old_steps[i]
+                old_dict = old_step.dict(exclude={"status", "notes", "actual_result"})
+                # 核心比较逻辑：内容相同则继承状态
+                if new_dict == old_dict:
+                    # 内容相同：继承旧状态和备注
+                    new_status = old_step.status  # <- 继承状态关键点
+                    new_note = old_step.notes     # <- 继承备注关键点
                 else:
-                    new_statuses.append("not_started")
-                    new_notes.append("")
+                    # 内容不同：使用预设的新状态
+                    new_status = new_statuses[i]  # 可能来自旧状态或默认值
+                    new_note = new_notes[i]       # 可能来自旧备注或默认值
+            else:
+                # 新增步骤：使用预设的默认状态
+                new_status = new_statuses[i]      # 来自补充的默认状态
+                new_note = new_notes[i]           # 来自补充的空备注
 
-            plan["steps"] = steps
-            plan["step_statuses"] = new_statuses
-            plan["step_notes"] = new_notes
+            # 新增/修改的步骤初始化状态
+            new_steps.append(
+                StepInfo(
+                    **new_dict,
+                    status=new_status,  # 最终确定的状态
+                    notes=new_note,     # 最终确定的备注
+                    actual_result=None  # 重置实际结果
+                )
+            )
+    
+        # 更新计划数据
+        plan["steps"] = new_steps
 
         return ToolResult(
             output=f"计划更新成功: {plan_id}\n\n{self._format_plan(plan)}"
@@ -227,8 +317,12 @@ class PlanningTool(BaseTool):
         for plan_id, plan in self.plans.items():
             current_marker = " (当前活动)" if plan_id == self._current_plan_id else ""
             completed = sum(
-                1 for status in plan["step_statuses"] if status == "completed"
+                1 for step in plan["steps"] 
+                if step.status == Status.COMPLETED.value  # 使用状态常量
             )
+            # 类型检查,确保数据结构正确
+            if not all(isinstance(step, StepInfo) for step in plan["steps"]):
+                raise ToolError(f"计划 {plan_id} 包含无效的步骤数据类型")
             total = len(plan["steps"])
             progress = f"{completed}/{total} 步骤完成"
             output += f"• {plan_id}{current_marker}: {plan['title']} - {progress}\n"
@@ -236,7 +330,11 @@ class PlanningTool(BaseTool):
         return ToolResult(output=output)
 
     def _get_plan(self, plan_id: Optional[str]) -> ToolResult:
-        """获取特定计划的详细信息"""
+        """获取特定计划的详细信息
+        
+        返回：
+            ToolResult: 包含计划详细信息的结果对象（类方法_format_plan的输出格式）
+        """
         if not plan_id:
             # 未指定plan_id时使用当前活动计划
             if not self._current_plan_id:
@@ -271,7 +369,12 @@ class PlanningTool(BaseTool):
         step_status: Optional[str],
         step_notes: Optional[str],
     ) -> ToolResult:
-        """标记步骤状态"""
+        """
+        标记步骤状态
+        逻辑流程:
+        1. 校验参数 → 2. 查找计划 → 3. 标记步骤 → 4. 返回结果
+        """
+        # 输入参数检验（plan）
         if not plan_id:
             # 未指定plan_id时使用当前活动计划
             if not self._current_plan_id:
@@ -279,38 +382,38 @@ class PlanningTool(BaseTool):
                     "没有活动计划。请指定plan_id或设置活动计划"
                 )
             plan_id = self._current_plan_id
-
         if plan_id not in self.plans:
             raise ToolError(f"找不到ID为 {plan_id} 的计划")
-
         if step_index is None:
             raise ToolError("mark_step命令需要step_index参数")
 
         plan = self.plans[plan_id]
 
-        # 边界索引检查，step_index是否有效
+        # 输入参数检验（step_index）
         if step_index < 0 or step_index >= len(plan["steps"]):
             raise ToolError(
                 f"无效的step_index: {step_index}。有效范围: 0 到 {len(plan['steps'])-1}"
             )
-
+        # 输入参数检验（step_status、step_notes）
         if step_status and step_status not in [
-            "not_started",
-            "in_progress",
-            "completed",
-            "blocked",
+            Status.NOT_STARTED.value,
+            Status.IN_PROGRESS.value,
+            Status.COMPLETED.value,
+            Status.BLOCKED.value
         ]:
             raise ToolError(
                 f"无效的step_status: {step_status}。有效状态: not_started, in_progress, completed, blocked"
             )
 
-        if step_status:
-            plan["step_statuses"][step_index] = step_status
-            
-        # 备注更新逻辑    
-        if step_notes:
-            plan["step_notes"][step_index] = step_notes
+        step = plan["steps"][step_index]
 
+        # 更新步骤状态和备注
+        if step_status:
+            step.status = step_status
+        if step_notes:
+            step.notes = step_notes
+
+        # 返回结果
         return ToolResult(
             output=f"步骤状态已更新\n{self._format_plan(plan)}"
         )
@@ -332,44 +435,123 @@ class PlanningTool(BaseTool):
         return ToolResult(output=f"计划 '{plan_id}' 已删除")
 
     def _format_plan(self, plan: Dict) -> str:
-        """格式化计划信息用于显示"""
-        output = f"计划: {plan['title']} (ID: {plan['plan_id']})\n"
-        output += "=" * len(output) + "\n\n"
+        """格式化计划信息，强调执行顺序和当前步骤状态"""
+        output = []
 
-        # 计算进度统计
-        total_steps = len(plan["steps"])
-        completed = sum(1 for status in plan["step_statuses"] if status == "completed")
-        in_progress = sum(
-            1 for status in plan["step_statuses"] if status == "in_progress"
-        )
-        blocked = sum(1 for status in plan["step_statuses"] if status == "blocked")
-        not_started = sum(
-            1 for status in plan["step_statuses"] if status == "not_started"
-        )
+        # 头部信息
+        output.append(f"📋 计划: {plan['title']} (ID: {plan['plan_id']})")
+        output.append("-" * 50)
 
-        output += f"进度: {completed}/{total_steps} 步骤完成 "
-        if total_steps > 0:
-            percentage = (completed / total_steps) * 100
-            output += f"({percentage:.1f}%)\n"
-        else:
-            output += "(0%)\n"
+        # 进度统计
+        steps = plan["steps"]
+        total = len(steps)
+        status_counts = {
+            "completed": 0,
+            "in_progress": 0,
+            "blocked": 0,
+            "not_started": 0
+        }
+        
+        current_step = None
+        blocked_steps = []
+        
+        # 状态检测循环
+        for idx, step in enumerate(steps):
+            status = step.status.lower()
+            
+            # 状态计数
+            if status in status_counts:
+                status_counts[status] += 1
+            
+            # 检测阻塞步骤
+            if status == Status.BLOCKED.value:
+                blocked_steps.append(idx)
+            
+            # 确定当前步骤（仅第一次出现）
+            if current_step is None:
+                if status == Status.IN_PROGRESS.value:
+                    current_step = idx
+                elif status == Status.NOT_STARTED.value:
+                    current_step = idx
 
-        output += f"状态: {completed} 完成, {in_progress} 进行中, {blocked} 阻塞, {not_started} 未开始\n\n"
-        output += "步骤:\n"
+        # 进度显示
+        output.append(f"进度: {status_counts['completed']}/{total} 步骤完成")
+        output.append(f"├── 完成( ✅ ): {status_counts['completed']}")
+        output.append(f"├── 进行中( 🚧 ): {status_counts['in_progress']}")
+        output.append(f"├── 阻塞( ⚠️ ): {status_counts['blocked']}")
+        output.append(f"└── 未开始( ⏳ ): {status_counts['not_started']}\n")
 
-        # 添加每个步骤及其状态和备注
-        for i, (step, status, notes) in enumerate(
-            zip(plan["steps"], plan["step_statuses"], plan["step_notes"])
-        ):
-            status_symbol = {
-                "not_started": "[ ]",
-                "in_progress": "[→]",
-                "completed": "[✓]",
-                "blocked": "[!]",
-            }.get(status, "[ ]")
+        # 详细步骤列表
+        output.append("📝 步骤详情:")
+        for idx, step in enumerate(steps):
+            status_icon = self._status_emoji(step.status)
+            prefix = "➤" if idx == current_step else "•"
+            
+            # 基础信息
+            output.append(f"{prefix} [{status_icon}] 步骤 {idx+1}: {step.description}")
+            
+            # 状态详细信息（仅显示非未开始状态）
+            if step.status != Status.NOT_STARTED.value:
+                info_lines = []
+                info_lines.append(f"    ├── 状态: {step.status}")
+                if step.expected_output:
+                    info_lines.append(f"    ├── 预期: {step.expected_output}")
+                if step.notes:
+                    info_lines.append(f"    ├── 备注: {step.notes}")
+                if step.actual_result is not None:
+                    info_lines.append(f"    └── 实际: \n{self._format_result(step.actual_result)}")
+                
+                # 优化显示结构
+                if len(info_lines) > 1:
+                    info_lines[-1] = info_lines[-1].replace("├──", "└──")
+                output.extend(info_lines)
+            output.append("")  # 步骤间空行
 
-            output += f"{i}. {status_symbol} {step}\n"
-            if notes:
-                output += f"   备注: {notes}\n"
+        # 当前步骤强调（在所有步骤之后显示）
+        if current_step is not None and current_step < len(steps):
+            step = steps[current_step]
+            output.append("🔍 当前应执行步骤:")
+            output.append(f"   → 步骤 {current_step+1}: {step.description}")
+            output.append(f"      预期输出: {step.expected_output or '未指定'}")
+            if step.actual_result is not None:
+                output.append(f"      实际结果: {self._format_result(step.actual_result)}")
+            output.append(f"      状态: {self._status_emoji(step.status)} {step.status}")
+            if step.notes:
+                output.append(f"      备注: {step.notes}")
+            output.append("")  # 空行分隔
 
-        return output
+        # 阻塞步骤警告
+        if blocked_steps:
+            output.append("🚨 阻塞步骤需要立即处理:")
+            for idx in blocked_steps:
+                step = steps[idx]
+                output.append(f"   ⚠ 步骤 {idx+1}: {step.description}")
+                output.append(f"      阻塞原因: {step.notes or '未说明原因'}")
+            output.append("")  # 空行分隔
+
+        # 执行约束说明
+        ###########还有修改的空间##########
+        output.append("\n⚠️  执行注意事项:")
+        output.append("1. 严格按步骤顺序执行，当前步骤未完成前禁止处理后续步骤，你只需要结合之前的步骤信息，执行当前应执行步骤")
+        output.append("2. 遇到阻塞状态( ⚠️ )必须优先解决，解除阻塞前不得继续后续步骤")
+        output.append("3. 实际结果与预期不符时需重新执行当前步骤")
+        output.append("-" * 50)
+
+        return "\n".join(output)
+
+    def _status_emoji(self, status: str) -> str:
+        """状态符号可视化"""
+        return {
+            "completed": "✅",
+            "in_progress": "🔄",
+            "blocked": "⚠️",
+            "not_started": "⏳"
+        }[status]
+
+    def _format_result(self, result: Any) -> str:
+        """格式化执行结果"""
+        if result is None:
+            return "暂无结果"
+        if isinstance(result, dict):
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        return str(result)
