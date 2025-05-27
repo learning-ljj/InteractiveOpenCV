@@ -1,54 +1,60 @@
 import sys
 from datetime import datetime
+from pathlib import Path
 
-from loguru import logger as _logger  # 导入loguru库并重命名为_logger
-
-from Infrastructure.config import PROJECT_ROOT  # 从项目配置中导入项目根目录
-
+from loguru import logger
+from Infrastructure.config import PROJECT_ROOT
 
 _print_level = "INFO"  # 默认打印日志级别
+_log_initialized = False  # 标志是否已经初始化日志
 
-
-def define_log_level(print_level="INFO", logfile_level="DEBUG", name: str = None):
+def define_log_level(
+        print_level="INFO", 
+        logfile_level="DEBUG", 
+        run_id: str = None, 
+        name: str = None):
     """配置日志级别并初始化日志记录器
     
     参数:
-        print_level (str): 控制台输出日志级别，默认为INFO
-        logfile_level (str): 文件记录日志级别，默认为DEBUG
+        print_level (str): 控制台输出日志级别
+        logfile_level (str): 文件记录日志级别
         name (str): 日志文件前缀名，可选
-        
-    返回:
-        Logger: 配置好的日志记录器实例
     """
-    global _print_level
-    _print_level = print_level  # 更新全局打印级别
+    global _print_level, _log_initialized
 
-    # 获取当前时间并格式化为字符串
-    current_date = datetime.now()
-    formatted_date = current_date.strftime("%Y%m%d%H%M%S")
+    if _log_initialized:
+        return logger  # 如果已初始化，直接返回现有日志记录器
     
-    # 如果有提供名称前缀，则组合名称和时间作为日志文件名
-    log_name = (
-        f"{name}_{formatted_date}" if name else formatted_date
-    )
+    _print_level = print_level
+    _log_initialized = True  # 标记为已初始化
+
+    # 生成日志文件名
+    timestamp = run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_name = f"{name}_{timestamp}" if name else timestamp
+
+    # 确保logs目录存在
+    log_dir = PROJECT_ROOT / "logs"
+    log_dir.mkdir(exist_ok=True)
 
     # 移除现有日志处理器
-    _logger.remove()
+    logger.remove()
     
     # 添加控制台日志处理器
-    _logger.add(sys.stderr, level=print_level)
+    logger.add(sys.stderr, level=print_level)
     
-    # 添加文件日志处理器，日志文件保存在项目logs目录下
-    _logger.add(PROJECT_ROOT / f"logs/{log_name}.log", level=logfile_level)
+    # 添加文件日志处理器
+    logger.add(
+        log_dir / f"{log_name}.log",
+        level=logfile_level,
+        encoding="utf-8",
+    )
     
-    return _logger  # 返回配置好的日志记录器
-
-
-# 初始化默认日志记录器
-logger = define_log_level()
+    return logger
 
 
 if __name__ == "__main__":
+    # 初始化默认日志记录器
+    logger = define_log_level(name="test")
     # 测试日志功能
     logger.info("应用程序启动")  # 记录一般信息
     logger.debug("调试信息")  # 记录调试信息

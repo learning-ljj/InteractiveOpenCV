@@ -1,9 +1,10 @@
+from datetime import datetime
 # 导入异步IO库
 import asyncio
 
 # 从项目模块导入Manus代理和日志记录器
 from Agent.Manus import Manus
-from Infrastructure.logger import logger
+from Infrastructure.logger import logger, define_log_level
 
 
 async def main():
@@ -40,5 +41,9 @@ async def main():
 
 
 if __name__ == "__main__":
+    # 生成单次运行的唯一ID（时间戳）
+    RUN_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # 初始化默认日志记录器
+    logger = define_log_level(run_id=RUN_ID)
     # 程序入口点，启动异步主函数
     asyncio.run(main())

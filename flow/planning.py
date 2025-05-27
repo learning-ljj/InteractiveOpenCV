@@ -348,7 +348,7 @@ class PlanningFlow(BaseFlow):
         合规性        | 符合预定义格式要求
 
         << 输出要求 >>
-        暂无特殊要求，仅输出执行结果。
+        输出markdown格式的执行结果。
         """
 
         # 使用代理执行步骤
@@ -367,8 +367,8 @@ class PlanningFlow(BaseFlow):
 
             return step_result
         except Exception as e:
-            logger.error(f"执行步骤 {self.current_step_index} 时出错: {e}")
-            return f"执行步骤 {self.current_step_index} 时出错: {str(e)}"
+            logger.error(f"执行步骤 {self.current_step_index+1}/{len(self.planning_tool.plans[self.active_plan_id]['steps'])} 时出错: {e}")
+            return f"执行步骤 {self.current_step_index+1}/{len(self.planning_tool.plans[self.active_plan_id]['steps'])} 时出错: {str(e)}"
 
     async def _mark_step_completed(self) -> None:
         """标记当前步骤为已完成"""

@@ -1,10 +1,10 @@
 import asyncio
 import time
+from datetime import datetime
 
 from Agent.Manus import Manus
 from flow.flow_factory import FlowFactory, FlowType
-from Infrastructure.logger import logger
-
+from Infrastructure.logger import logger, define_log_level
 
 async def run_flow():
     """主异步函数，负责运行规划流程"""
@@ -59,5 +59,9 @@ async def run_flow():
 
 
 if __name__ == "__main__":
+    # 生成单次运行的唯一ID（时间戳）
+    RUN_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # 初始化默认日志记录器
+    logger = define_log_level(run_id=RUN_ID)
     # 运行主异步函数
     asyncio.run(run_flow())

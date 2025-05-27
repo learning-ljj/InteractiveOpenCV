@@ -55,7 +55,7 @@ class ToolCall(BaseModel):
 
 class Message(BaseModel):
     """表示对话中的聊天消息"""
-    role: ROLE_TYPE = Field(...)  # 消息角色，必需字段
+    role: ROLE_TYPE = Field(...)   # type: ignore  # 消息角色，必需字段
     content: Optional[str] = Field(default=None)  # 消息内容，可选
     tool_calls: Optional[List[ToolCall]] = Field(default=None)  # 工具调用列表，可选
     name: Optional[str] = Field(default=None)  # 名称标识，可选
