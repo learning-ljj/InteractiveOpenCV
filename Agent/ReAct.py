@@ -5,11 +5,12 @@ from pydantic import Field
 
 from Agent.Base import BaseAgent  # 从基础模块导入代理基类
 from llm import LLM  # 导入语言模型接口
-from Infrastructure.schema import AgentState, Memory  # 导入代理状态和记忆相关类型
+from Infrastructure.schema import AgentState  # 导入代理状态和记忆相关类型
+from Memory.ExecutorMemory import ExecutorMemory  # 执行代理Memory模块
 
 
 class ReActAgent(BaseAgent, ABC):
-    """ReAct代理框架，继承自Agent\Base并实现思考-执行循环模式"""
+    """ReAct代理框架，继承自Agent/Base并实现思考-执行循环模式"""
     
     name: str  # 代理名称，必须由子类指定
     description: Optional[str] = None  # 代理功能描述，可选
@@ -20,7 +21,7 @@ class ReActAgent(BaseAgent, ABC):
 
     # 核心组件
     llm: Optional[LLM] = Field(default_factory=LLM)  # 语言模型实例，默认自动创建
-    memory: Memory = Field(default_factory=Memory)  # 记忆存储实例，默认自动创建
+    memory: ExecutorMemory = Field(default_factory=ExecutorMemory)  # 记忆存储实例，默认自动创建
     state: AgentState = AgentState.IDLE  # 代理初始状态设为空闲
 
     # 执行控制参数

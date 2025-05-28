@@ -134,6 +134,9 @@ class PlanningFlow(BaseFlow):
                 if hasattr(executor, "state") and executor.state == AgentState.FINISHED:
                     break
 
+            # 完成计划后将结果存储在execution_log中
+            plan_data = self.planning_tool.plans[self.active_plan_id] # plan_data是一个字典
+            plan_data.execution_log = result # 将执行结果存储在execution_log中
             return result
         except Exception as e:
             logger.error(f"规划流程执行错误: {str(e)}")
@@ -242,7 +245,7 @@ class PlanningFlow(BaseFlow):
         try:
             # 获取计划数据
             plan_data = self.planning_tool.plans[self.active_plan_id] # plan_data是一个字典
-            steps = plan_data.get("steps", []) # 字典的 get() 方法安全获取键的对应值，steps是一个列表
+            steps = plan_data.steps # steps是一个列表
 
             # 查找第一个未完成的步骤
             for i, step in enumerate(steps):  # 遍历所有步骤，i是索引，step是步骤内容
@@ -319,7 +322,7 @@ class PlanningFlow(BaseFlow):
         {plan_context}
 
         << 当前任务 >>
-        ■ 步骤编号：{self.current_step_index+1}/{len(self.planning_tool.plans[self.active_plan_id]['steps'])}
+        ■ 步骤编号：{self.current_step_index+1}/{len(self.planning_tool.plans[self.active_plan_id].steps)}
         ■ 任务描述：{step_text}
         ■ 预期输出：{expected_output}
         ■ 备注：{step_info.get('notes', '无备注')}
@@ -367,8 +370,8 @@ class PlanningFlow(BaseFlow):
 
             return step_result
         except Exception as e:
-            logger.error(f"执行步骤 {self.current_step_index+1}/{len(self.planning_tool.plans[self.active_plan_id]['steps'])} 时出错: {e}")
-            return f"执行步骤 {self.current_step_index+1}/{len(self.planning_tool.plans[self.active_plan_id]['steps'])} 时出错: {str(e)}"
+            logger.error(f"执行步骤 {self.current_step_index+1}/{len(self.planning_tool.plans[self.active_plan_id].steps)} 时出错: {e}")
+            return f"执行步骤 {self.current_step_index+1}/{len(self.planning_tool.plans[self.active_plan_id].steps)} 时出错: {str(e)}"
 
     async def _mark_step_completed(self) -> None:
         """标记当前步骤为已完成"""
@@ -385,11 +388,11 @@ class PlanningFlow(BaseFlow):
             )
             # 添加已完成步骤的执行日志
             plan = self.planning_tool.plans[self.active_plan_id]
-            step = plan["steps"][self.current_step_index]
+            step = plan.steps[self.current_step_index]
             step.notes += f"完成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}  执行状态: {PlanStepStatus.COMPLETED.value}"
             # 显示进度
             logger.info(
-                f"已标记步骤 {self.current_step_index+1}/{len(self.planning_tool.plans[self.active_plan_id]['steps'])} 为COMPLETED"
+                f"已标记步骤 {self.current_step_index+1}/{len(self.planning_tool.plans[self.active_plan_id].steps)} 为COMPLETED"
                 )
             
         except Exception as e:
@@ -397,7 +400,7 @@ class PlanningFlow(BaseFlow):
             # 直接更新规划工具存储中的状态
             if self.active_plan_id in self.planning_tool.plans:
                 plan_data = self.planning_tool.plans[self.active_plan_id]
-                step_statuses = plan_data.get("step_statuses", [])
+                step_statuses = plan_data.step_statuses
 
                 # 确保步骤状态列表足够长
                 while len(step_statuses) <= self.current_step_index:
@@ -405,13 +408,13 @@ class PlanningFlow(BaseFlow):
 
                 # 更新状态
                 step_statuses[self.current_step_index] = PlanStepStatus.COMPLETED.value
-                plan_data["step_statuses"] = step_statuses
+                plan_data.step_statuses = step_statuses
 
     async def _update_plan_text(self, step_result: str) -> str:
         """总结当前步骤的实际执行结果，更新并返回计划文本"""
         try:
             plan_data = self.planning_tool.plans[self.active_plan_id] # plan_data是一个字典
-            steps = plan_data.get("steps", []) # 字典的 get() 方法安全获取键的对应值，steps是一个列表，元素为StepInfo对象
+            steps = plan_data.steps # 字典的 get() 方法安全获取键的对应值，steps是一个列表，元素为StepInfo对象
 
             # 利用llm总结步骤结果，提取精准简要的有效信息
             system_message = Message.system_message(
@@ -495,11 +498,11 @@ class PlanningFlow(BaseFlow):
             output = []
 
             # 头部信息
-            output.append(f"📋 计划: {plan_data['title']} (ID: {self.active_plan_id})")
+            output.append(f"📋 计划: {plan_data.title} (ID: {self.active_plan_id})")
             output.append("-" * 50)
 
             # 进度统计
-            steps = plan_data["steps"]
+            steps = plan_data.steps
             total = len(steps)
             status_counts = {
                 "completed": 0,

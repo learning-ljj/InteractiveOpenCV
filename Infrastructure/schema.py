@@ -157,33 +157,39 @@ class Message(BaseModel):
         )
 
 
-class Memory(BaseModel):
-    """定义对话记忆存储"""
-    messages: List[Message] = Field(default_factory=list)  # 消息列表
-    max_messages: int = Field(default=100)  # 最大消息数量限制
+class Status(str, Enum):
+    """计划步骤状态枚举类"""
+    NOT_STARTED = "not_started"  # 未开始
+    IN_PROGRESS = "in_progress"  # 进行中
+    COMPLETED = "completed"  # 已完成
+    BLOCKED = "blocked"  # 已阻塞
 
-    def add_message(self, message: Message) -> None:
-        """添加单条消息到记忆"""
-        self.messages.append(message)
-        # 可选: 实现消息数量限制
-        if len(self.messages) > self.max_messages:
-            self.messages = self.messages[-self.max_messages :]
+    @classmethod
+    def get_active_statuses(cls) -> list[str]:
+        """获取活动状态列表(未开始或进行中)"""
+        return [cls.NOT_STARTED.value, cls.IN_PROGRESS.value]
 
-    def add_messages(self, messages: List[Message]) -> None:
-        """添加多条消息到记忆"""
-        self.messages.extend(messages)
-        # 可选: 实现消息数量限制
-        if len(self.messages) > self.max_messages:
-            self.messages = self.messages[-self.max_messages :]
+class StepInfo(BaseModel):
+    """步骤详细配置模型"""
+    description: str
+    expected_output: Optional[str] = None
+    actual_result: Optional[Any] = None
+    status: str = Status.NOT_STARTED.value  # 状态值: not_started/in_progress/completed/blocked
+    notes: str = ""
 
-    def clear(self) -> None:
-        """清除所有消息"""
-        self.messages.clear()
+class Plan(BaseModel):
+    """计划数据结构模型"""
+    plan_id: str = Field(..., description="计划唯一标识")
+    title: str = Field(..., description="计划标题")
+    steps: List[StepInfo] = Field(default_factory=list, description="步骤列表")
+    execution_log: str = Field(default="", description="执行日志")
+    
+    def to_dict(self) -> dict:
+        """转换为字典格式"""
+        return {
+            "plan_id": self.plan_id,
+            "title": self.title,
+            "steps": [step.dict() for step in self.steps],
+            "execution_log": self.execution_log
+        }
 
-    def get_recent_messages(self, n: int) -> List[Message]:
-        """获取最近的n条消息"""
-        return self.messages[-n:]
-
-    def to_dict_list(self) -> List[dict]:
-        """将消息列表转换为字典列表"""
-        return [msg.to_dict() for msg in self.messages]

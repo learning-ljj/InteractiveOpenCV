@@ -7,8 +7,9 @@ from pydantic import BaseModel, Field, model_validator  # 数据验证和设置�
 from llm import LLM  # 语言模型接口
 from Infrastructure.logger import logger  # 日志记录器
 from Infrastructure.sandbox.client import SANDBOX_CLIENT  # 沙箱环境客户端
-from Infrastructure.schema import ROLE_TYPE, AgentState, Memory, Message  # 类型定义和数据结构
+from Infrastructure.schema import ROLE_TYPE, AgentState, Message  # 类型定义和数据结构
 
+from Memory.ExecutorMemory import ExecutorMemory  # 执行代理Memory模块
 
 class BaseAgent(BaseModel, ABC):
     """代理基类，用于管理代理状态和执行流程
@@ -31,7 +32,7 @@ class BaseAgent(BaseModel, ABC):
 
     # 依赖组件
     llm: LLM = Field(default_factory=LLM, description="语言模型实例")
-    memory: Memory = Field(default_factory=Memory, description="代理的记忆存储")
+    memory: ExecutorMemory = Field(default_factory=ExecutorMemory, description="代理的记忆存储")
     state: AgentState = Field(
         default=AgentState.IDLE, description="代理当前状态"
     )
@@ -53,8 +54,8 @@ class BaseAgent(BaseModel, ABC):
         """
         if self.llm is None or not isinstance(self.llm, LLM):
             self.llm = LLM(config_name=self.name.lower())
-        if not isinstance(self.memory, Memory):
-            self.memory = Memory()
+        if not isinstance(self.memory, ExecutorMemory):
+            self.memory = ExecutorMemory()
         return self
 
     @asynccontextmanager
