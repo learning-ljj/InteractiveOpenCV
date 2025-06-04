@@ -2,8 +2,9 @@
 import json
 from typing import Dict, List, Literal, Optional, Any
 
-from pydantic import ValidationError
+from pydantic import ValidationError, Field
 
+from Memory.GlobalMemory import GlobalMemory
 from Infrastructure.exceptions import ToolError
 from tool.base import BaseTool, ToolResult
 from Infrastructure.schema import Status, StepInfo, Plan
@@ -39,6 +40,33 @@ class PlanningTool(BaseTool):
     # 工具元数据定义
     name: str = "planning"  # 工具名称，用于系统识别
     description: str = _PLANNING_TOOL_DESCRIPTION  # 工具功能描述
+    global_memory: GlobalMemory = Field(...)  # 必需字段
+
+    # 计划存储结构定义
+    plans: Dict[str, Plan] = Field(
+        default_factory=dict, 
+        description="所有计划的存储仓库"
+    )  # 所有计划的存储仓库，格式为嵌套着Plan对象的字典: {plan_id: {plan_data}}
+    _current_plan_id: Optional[str] = None  # 当前活动计划的ID
+
+    def __init__(
+        self,
+        global_memory: Optional[GlobalMemory] = None,
+        **kwargs
+    ):
+        # 确保global_memory存在
+        if global_memory is None:
+            # 获取单例实例
+            global_memory = GlobalMemory()
+
+        # 直接调用父类初始化并传递参数
+        super().__init__(
+            global_memory=global_memory,  # 确保传递必需字段
+            **kwargs
+        )
+        
+        # 显式设置 global_memory
+        self.global_memory = global_memory
     
     # OpenAPI规范的参数定义 (用于LLM工具调用)
     parameters: dict = {
@@ -88,10 +116,6 @@ class PlanningTool(BaseTool):
         "required": ["command"],
         "additionalProperties": False
     }
-
-    # 计划存储结构
-    plans: Dict[str, Plan] = {}  # 所有计划的存储仓库，格式为嵌套着Plan对象的字典: {plan_id: {plan_data}}
-    _current_plan_id: Optional[str] = None  # 当前活动计划ID，用于简化操作
 
     async def execute(
         self,
@@ -152,7 +176,7 @@ class PlanningTool(BaseTool):
         """
         创建新计划
         逻辑流程:
-        1. 参数校验 → 2. 构建步骤对象 → 3. 存储计划 → 4. 设为活动计划 → 5. 返回结果
+        1. 参数校验 → 2. 构建步骤对象 → 3. 存储计划，同步到全局记忆 → 4. 设为活动计划 → 5. 返回结果
         """
         # 参数校验
         if not plan_id:
@@ -178,8 +202,8 @@ class PlanningTool(BaseTool):
             try:
                 step_obj = StepInfo(**step)
                 step_objects.append(step_obj)
-            except ValidationError as e:
-                raise ToolError(f"步骤{i}配置错误: {str(e)}")        
+            except ValidationError:
+                raise ToolError(f"无效的步骤格式: 索引{i} - {step}")    
 
         # 创建计划结构
         plan = Plan(
@@ -190,6 +214,7 @@ class PlanningTool(BaseTool):
         )
 
         self.plans[plan_id] = plan
+        self.global_memory.sync_plans(self.plans)  # 同步到全局记忆
         self._current_plan_id = plan_id  # 设为活动计划
 
         return ToolResult(
@@ -200,7 +225,7 @@ class PlanningTool(BaseTool):
             self, 
             plan_id: str, 
             title: Optional[str], 
-            steps: Optional[List[dict]]  # llm只能返回字典列表，所以这里也只能接收字典列表
+            steps: Optional[List[dict]]
     ) -> ToolResult:
         """
         更新计划
@@ -226,68 +251,48 @@ class PlanningTool(BaseTool):
         # 更新步骤内容
         if steps:
             # 参数校验
-            if not isinstance(steps, list) or not all(isinstance(step, dict) for step in steps):  # llm只能返回字典列表，所以这里也只能接收字典列表
-                raise ToolError(
-                    "update命令的steps参数必须是非空字典列表"
-                )
+            if not isinstance(steps, list) or not all(isinstance(step, dict) for step in steps):
+                raise ToolError("update命令的steps参数必须是非空字典列表")
 
-            # 构建新的StepInfo对象列表
-            new_steps = []
-            for step in steps:
-                try:
-                    new_steps.append(StepInfo(**step))
-                except ValidationError as e:
-                    raise ToolError(f"步骤配置错误: {str(e)}")
-
-            # 提取旧步骤的状态和备注
+            # 创建最终步骤列表
+            final_steps = []
             old_steps = plan.steps
-            old_statuses = [s.status for s in old_steps]
-            old_notes = [s.notes for s in old_steps]
             
-            # 初始化新状态列表
-            new_statuses = old_statuses[:len(new_steps)]
-            new_notes = old_notes[:len(new_steps)]
-            
-            # 补充默认状态
-            while len(new_statuses) < len(new_steps):
-                new_statuses.append(Status.NOT_STARTED.value)
-                new_notes.append("")
-
-            # 智能合并步骤状态
-            for i, new_step in enumerate(new_steps):
-                # 转换为字典，用于比较（排除状态相关字段）
-                new_dict = new_step.dict(exclude={"status", "notes", "actual_result"})
-                
-                # 检查是否存在可继承状态的旧步骤
-                if i < len(old_steps):
-                    old_step = old_steps[i]
-                    old_dict = old_step.dict(exclude={"status", "notes", "actual_result"})
-                    # 核心比较逻辑：内容相同则继承状态
-                    if new_dict == old_dict:
-                        # 内容相同：继承旧状态和备注
-                        new_status = old_step.status  # <- 继承状态关键点
-                        new_note = old_step.notes     # <- 继承备注关键点
-                    else:
-                        # 内容不同：使用预设的新状态
-                        new_status = new_statuses[i]  # 可能来自旧状态或默认值
-                        new_note = new_notes[i]       # 可能来自旧备注或默认值
-                else:
-                    # 新增步骤：使用预设的默认状态
-                    new_status = new_statuses[i]      # 来自补充的默认状态
-                    new_note = new_notes[i]           # 来自补充的空备注
-
-                # 新增/修改的步骤初始化状态
-                new_steps.append(
-                    StepInfo(
-                        **new_dict,
-                        status=new_status,  # 最终确定的状态
-                        notes=new_note,     # 最终确定的备注
-                        actual_result=None  # 重置实际结果
+            # 处理每个新步骤
+            for i, step_dict in enumerate(steps):
+                try:
+                    # 创建新步骤对象（使用传入的字典）
+                    new_step = StepInfo(
+                        description=step_dict.get("description", ""),
+                        expected_output=step_dict.get("expected_output", ""),
+                        notes=step_dict.get("notes", "")  # 使用传入的备注
                     )
-                )
-    
-        # 更新计划数据
-        plan.steps = new_steps
+                    
+                    # 检查是否存在对应旧步骤
+                    if i < len(old_steps):
+                        old_step = old_steps[i]
+                        
+                        # 比较步骤内容（只比较描述和预期输出）
+                        if (new_step.description == old_step.description and 
+                            new_step.expected_output == old_step.expected_output):
+                            # 内容相同：继承状态和实际结果
+                            new_step.status = old_step.status
+                            new_step.actual_result = old_step.actual_result
+                        else:
+                            # 内容不同：重置状态和实际结果
+                            new_step.status = Status.NOT_STARTED.value
+                            new_step.actual_result = None
+                    else:
+                        # 新增步骤：使用默认状态
+                        new_step.status = Status.NOT_STARTED.value
+                        new_step.actual_result = None
+                    
+                    final_steps.append(new_step)
+                except ValidationError as e:
+                    raise ToolError(f"步骤{i}配置错误: {str(e)}")
+        
+            # 更新计划数据
+            plan.steps = final_steps
 
         return ToolResult(
             output=f"计划更新成功: {plan_id}\n\n{self._format_plan(plan)}"
@@ -317,7 +322,7 @@ class PlanningTool(BaseTool):
         return ToolResult(output=output)
 
     def _get_plan(self, plan_id: Optional[str]) -> ToolResult:
-        """获取特定计划的详细信息
+        """获取特定计划的详细信息，
         
         返回：
             ToolResult: 包含计划详细信息的结果对象（类方法_format_plan的输出格式）

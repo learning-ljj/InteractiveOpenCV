@@ -1,10 +1,9 @@
-# 导入必要的模块
+# Infrastructure/schema.py
 from enum import Enum  # 枚举类型支持
-from typing import Any, List, Literal, Optional, Union  # 类型提示相关
-
+from typing import List, Any, List, Literal, Optional, Union  # 类型提示相关
 from pydantic import BaseModel, Field  # 数据验证和设置管理
 
-
+# ====================== 消息角色 ======================
 class Role(str, Enum):
     """定义消息角色枚举类型"""
     SYSTEM = "system"     # 系统角色
@@ -18,7 +17,7 @@ ROLE_VALUES = tuple(role.value for role in Role)
 # 创建字面量类型用于类型检查
 ROLE_TYPE = Literal[ROLE_VALUES]  # type: ignore
 
-
+# ====================== 工具选择选项 ======================
 class ToolChoice(str, Enum):
     """定义工具选择选项枚举类型"""
     NONE = "none"      # 不使用工具
@@ -31,7 +30,7 @@ TOOL_CHOICE_VALUES = tuple(choice.value for choice in ToolChoice)
 # 创建字面量类型用于类型检查
 TOOL_CHOICE_TYPE = Literal[TOOL_CHOICE_VALUES]  # type: ignore
 
-
+# ====================== Agent执行 ======================
 class AgentState(str, Enum):
     """定义代理执行状态枚举类型"""
     IDLE = "IDLE"      # 空闲状态
@@ -52,7 +51,7 @@ class ToolCall(BaseModel):
     type: str = "function"  # 调用类型，默认为"function"
     function: Function  # 函数调用详情
 
-
+# ====================== 消息系统模型 ======================
 class Message(BaseModel):
     """表示对话中的聊天消息"""
     role: ROLE_TYPE = Field(...)   # type: ignore  # 消息角色，必需字段
@@ -156,7 +155,7 @@ class Message(BaseModel):
             **kwargs,
         )
 
-
+# ====================== 计划与执行 ======================
 class Status(str, Enum):
     """计划步骤状态枚举类"""
     NOT_STARTED = "not_started"  # 未开始
@@ -169,13 +168,14 @@ class Status(str, Enum):
         """获取活动状态列表(未开始或进行中)"""
         return [cls.NOT_STARTED.value, cls.IN_PROGRESS.value]
 
+
 class StepInfo(BaseModel):
-    """步骤详细配置模型"""
+    """记录步骤(Executor)执行信息的模型"""
     description: str
     expected_output: Optional[str] = None
     actual_result: Optional[Any] = None
     status: str = Status.NOT_STARTED.value  # 状态值: not_started/in_progress/completed/blocked
-    notes: str = ""
+    notes: str = ""  # 备注信息
 
 class Plan(BaseModel):
     """计划数据结构模型"""

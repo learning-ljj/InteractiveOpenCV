@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, model_validator  # 数据验证和设置�
 from llm import LLM  # 语言模型接口
 from Infrastructure.logger import logger  # 日志记录器
 from Infrastructure.sandbox.client import SANDBOX_CLIENT  # 沙箱环境客户端
-from Infrastructure.schema import ROLE_TYPE, AgentState, Message  # 类型定义和数据结构
+from Infrastructure.schema import ROLE_TYPE, AgentState, Message, StepInfo  # 类型定义和数据结构
 
 from Memory.ExecutorMemory import ExecutorMemory  # 执行代理Memory模块
 
@@ -17,6 +17,8 @@ class BaseAgent(BaseModel, ABC):
     提供状态转换、记忆管理和基于步骤的执行循环等基础功能。
     子类必须实现`step`方法。
     """
+    # 调用PlanningFlow时的辅助属性，判断是否记录信息到StepInfo
+    current_step_index: Optional[int] = Field(None, description="代理的可选描述信息")
 
     # 核心属性
     name: str = Field(..., description="代理的唯一名称")

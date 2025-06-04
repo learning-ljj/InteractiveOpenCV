@@ -5,6 +5,7 @@ from datetime import datetime
 from Agent.Manus import Manus
 from flow.flow_factory import FlowFactory, FlowType
 from Infrastructure.logger import logger, define_log_level
+from Memory.GlobalMemory import GlobalMemory
 
 async def run_flow():
     """主异步函数，负责运行规划流程"""
@@ -27,6 +28,7 @@ async def run_flow():
         flow = FlowFactory.create_flow(
             flow_type=FlowType.PLANNING,  # 使用规划流程类型
             agents=agents,  # 传入代理字典
+            global_memory=global_memory  # 传入全局记忆实例
         )
         logger.warning("正在处理您的请求，请稍候...")
 
@@ -63,5 +65,7 @@ if __name__ == "__main__":
     RUN_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
     # 初始化默认日志记录器
     logger = define_log_level(run_id=RUN_ID)
+    # 创建单例全局记忆
+    global_memory = GlobalMemory()
     # 运行主异步函数
     asyncio.run(run_flow())

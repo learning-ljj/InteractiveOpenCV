@@ -16,6 +16,7 @@ class BaseFlow(BaseModel, ABC):
     class Config:
         """Pydantic配置类"""
         arbitrary_types_allowed = True  # 允许任意类型
+        extra = "ignore"
 
     def __init__(
         self, 

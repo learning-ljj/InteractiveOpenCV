@@ -80,6 +80,7 @@ class ToolCallAgent(ReActAgent):
                 tools=self.available_tools.to_params(),
                 tool_choice=self.tool_choices,
             )
+
         except ValueError:
             raise
         except Exception as e:
@@ -314,6 +315,8 @@ class ToolCallAgent(ReActAgent):
     async def cleanup(self):
         """清理代理工具使用的资源"""
         logger.info(f"🧹 正在清理代理'{self.name}'的资源...")
+        self.memory.clear()
+        logger.info(f"🧹 代理'{self.name}'的记忆已清空.")
         for tool_name, tool_instance in self.available_tools.tool_map.items():
             if hasattr(tool_instance, "cleanup") and asyncio.iscoroutinefunction(
                 tool_instance.cleanup
@@ -345,4 +348,4 @@ class ToolCallAgent(ReActAgent):
             logger.error(f"代理执行异常: {str(e)}")
             raise
         finally:
-            logger.debug(f"✨ {self.name}执行完成")
+            logger.debug(f"✨ {self.name}执行结束")

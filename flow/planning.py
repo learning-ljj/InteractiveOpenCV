@@ -8,6 +8,7 @@ from pydantic import Field
 
 from Agent.Base import BaseAgent
 from flow.base import BaseFlow
+from Memory.GlobalMemory import GlobalMemory, PlanContext
 from llm import LLM
 from tool import PlanningTool
 from tool.planning import Status as PlanStepStatus
@@ -19,7 +20,9 @@ class PlanningFlow(BaseFlow):
     """规划流程类，管理任务规划与多代理执行"""
 
     llm: LLM = Field(default_factory=lambda: LLM())  # 语言模型实例
-    planning_tool: PlanningTool = Field(default_factory=PlanningTool)  # 规划工具实例
+    global_memory: GlobalMemory = Field(default_factory=GlobalMemory)  # 全局记忆实例
+    plan_context: PlanContext = Field(default_factory=PlanContext)
+    planning_tool: PlanningTool = Field(...)  # 不初始化，在__init__中处理
     executor_keys: List[str] = Field(default_factory=list)  # 执行代理键名列表
     active_plan_id: str = Field(default_factory=lambda: f"plan_{int(time.time())}")  # 当前活动计划ID
     current_step_index: Optional[int] = None  # 当前执行步骤索引
@@ -38,15 +41,17 @@ class PlanningFlow(BaseFlow):
         # 处理执行代理键名
         if "executors" in data:
             data["executor_keys"] = data.pop("executors")
-
         # 处理计划ID
         if "plan_id" in data:
             data["active_plan_id"] = data.pop("plan_id")
 
-        # 初始化规划工具
+        # 获取单例全局记忆(确保全局唯一)  确保global_memory在data中（Pydantic初始化需要）
+        if "global_memory" not in data:
+            data["global_memory"] = GlobalMemory()
+
+        # 确保planning_tool在data中（Pydantic初始化需要）
         if "planning_tool" not in data:
-            planning_tool = PlanningTool()
-            data["planning_tool"] = planning_tool
+            data["planning_tool"] = PlanningTool(global_memory=data["global_memory"])
 
         # 调用父类初始化
         super().__init__(agents, **data)
@@ -92,7 +97,10 @@ class PlanningFlow(BaseFlow):
 
             # 根据输入创建初始计划
             if input_text:
-                await self._create_initial_plan(input_text)
+                self.global_memory.retrieve_relevant_experience(input_text) # 根据用户输入检索相关经验
+                # 调用相关经验创建初始计划
+                await self._create_initial_plan(input_text) # 创建初始计划并同步到GlobalMemory
+
                 # 获取计划信息
                 plan_result = await self.planning_tool.execute(
                     command="get",
@@ -106,12 +114,14 @@ class PlanningFlow(BaseFlow):
 
             result = ""
             while True:
-                # 获取当前步骤索引（int）和步骤信息（一个字典）
+                # 获取当前步骤索引（从0开始）（int）和步骤信息（一个字典）
                 step_index, step_info = await self._get_current_step_info()
 
-                # 如果没有更多步骤或计划已完成，退出循环，总结计划结果
+                # 如果没有更多步骤或计划已完成，退出循环，总结计划结果，并清空全局记忆（清空前尝试存储成功经验）
                 if step_index is None or not step_info:
                     result += await self._finalize_plan()
+                    self.plan_context.clear()
+                    self.global_memory.clear_global_memory()
                     break
 
                 # 更新当前步骤索引
@@ -121,11 +131,16 @@ class PlanningFlow(BaseFlow):
                 step_type = step_info.get("type") if step_info else None
                 executor = self.get_executor(step_type)
 
-                # 执行步骤并获取结果
+                # 读取跨步骤共享变量，执行步骤并获取结果
                 step_result = await self._execute_step(executor, step_info)
+                # 添加更新跨步骤共享变量
+                await self.plan_context.set_step_context(
+                    self.global_memory.plans[self.active_plan_id], 
+                    self.current_step_index, 
+                    step_result)
                 result += step_result + "\n"
 
-                # 总结当前步骤的实际执行结果，并更新计划文本
+                # 总结当前步骤的实际执行结果，并更新计划文本（在更新后同步到GlobalMemory）
                 plan_result = await self._update_plan_text(step_result)
                 # 显示更新后的计划
                 logger.info(f"\n📋 更新后的计划状态:\n{plan_result}")
@@ -135,8 +150,9 @@ class PlanningFlow(BaseFlow):
                     break
 
             # 完成计划后将结果存储在execution_log中
-            plan_data = self.planning_tool.plans[self.active_plan_id] # plan_data是一个字典
-            plan_data.execution_log = result # 将执行结果存储在execution_log中
+            plan_data = self.planning_tool.plans.get(self.active_plan_id) # plan_data是一个字典，添加.get() 安全访问
+            if plan_data:
+                plan_data.execution_log = result # 将执行结果存储在execution_log中
             return result
         except Exception as e:
             logger.error(f"规划流程执行错误: {str(e)}")
@@ -148,24 +164,34 @@ class PlanningFlow(BaseFlow):
         参数:
             request: 用户请求文本
         """
-        logger.info(f"正在创建初始计划，ID: {self.active_plan_id}")
+        logger.info(f"正在创建初始计划，ID: {self.active_plan_id}")        
 
         # 创建系统消息
         system_message = Message.system_message(
-            "作为专业规划助手，请按以下规则创建可执行的简明计划：\n"
-            "1. 分析任务需求(分析显性需求和隐性需求)，明确任务的核心目标及成功标准"
-            "2. 计划应包含明确的阶段，如 学习准备→开发→测试与优化→文档记录\n"
-            "3. 必须使用[PHASE]标记各个步骤所处的阶段，如[RESEARCH]/[DEV]/[OPTIMIZATION]/[DOCUMENTATION]\n"
-            "4. 计划应包含清晰的可执行步骤，每个步骤应包括描述和预期输出，但'Focus on key milestones rather than detailed sub-steps.\n"
+            "作为专业规划助手，整合历史经验创建新计划，请按以下规则创建可执行的简明计划：\n"
+            "1. 分析任务需求(分析显性需求和隐性需求)，明确任务的核心目标及成功标准\n"
+            "2. 根据目标需求，结合历史经验中可借鉴的优秀思路与需规避的卡顿点，创建执行计划\n"
+            "3. 计划应包含明确的阶段，必须使用[PHASE]标记各个步骤所处的阶段，如[RESEARCH]/[DEV]/[OPTIMIZATION]/[DOCUMENTATION]\n"
+            "4. 每个步骤的步骤描述部分必须包含下面三个明确部分，分成三个短句，形成完整的逻辑流，包括：前步产出→本步操作→后步支持\n"
+            "   a) 前步产出：必须自然承接前序步骤的关键输出结果\n"
+            "   b) 本步操作：描述清晰的可执行的本步骤操作\n"
+            "   c) 后步支持：隐含输出对接，对接后续步骤\n"
+            "5. 步骤描述保持自然语流，避免分段式结构\n"
+            "6. 每个步骤应包括描述和预期输出，但'Focus on key milestones rather than detailed sub-steps.\n"
             "示例步骤格式：\n"
-            "[RESEARCH] 理解相关基础知识与算法原理"
+            "[RESEARCH] 基于用户输入的景点需求->收集广州小众景点地理数据和特色信息->输出景点清单和特征分析报告\n"
+            "[DEV] 接收景点特征数据->设计时间和交通最优路线->生成包含时间节点的路线方案\n"
         )
-
         # 创建用户消息
         user_message = Message.user_message(
-            f"请在分析用户显性需求和隐性需求后，调用Plan工具为以下任务创建执行计划：\n"
+            f"请在结合历史经验、分析用户显性需求和隐性需求后，调用Plan工具为以下任务创建执行计划：\n"
             f"注意事项：各个步骤的开头必须使用[PHASE]标记，如[RESEARCH]/[DEV]/[OPTIMIZATION]/[DOCUMENTATION]\n"
+            f"历史经验：\n{self.__summarize_items(self.global_memory.experience)}\n"
             f"任务需求：{request}\n\n"
+            f"输出要求：\n"
+            f"- 每个步骤必须包含[PHASE]标记\n"
+            f"- 描述必须按'a->b->c'三部分格式\n"
+            f"- 示例：[RESEARCH] 输入说明->执行动作->输出说明"
         )
 
         # 调用LLM创建计划
@@ -189,7 +215,7 @@ class PlanningFlow(BaseFlow):
                             logger.error(f"工具参数解析失败: {args}")
                             continue
 
-                    # 设置计划ID并执行工具
+                    # 设置计划ID并执行工具（create指令会调用GlobalMemory的sync_plans方法）
                     args["plan_id"] = self.active_plan_id
                     result = await self.planning_tool.execute(**args)
 
@@ -231,6 +257,35 @@ class PlanningFlow(BaseFlow):
             }
         )
 
+    # _create_initial_plan的辅助方法
+    def __summarize_items(self, item_list):
+        """
+        提取列表中所有元素的summary属性并组合成文本
+        
+        参数:
+            item_list: 包含具有summary属性的对象列表
+            
+        返回:
+            包含所有summary的文本字符串（每个summary占一行）
+            如果是空列表则返回空字符串
+        """
+        # 检查空列表情况
+        if not item_list:
+            return ""
+        
+        # 提取所有有效的summary
+        summaries = []
+        for item in item_list:
+            # 安全地获取summary属性
+            summary = getattr(item, "summary", "")
+            
+            # 检查summary是否有效（非空字符串）
+            if summary and isinstance(summary, str):
+                summaries.append(summary)
+        
+        # 组合所有summary文本
+        return "\n".join(summaries)
+
     async def _get_current_step_info(self) -> tuple[Optional[int], Optional[dict]]:
         """获取当前步骤信息
         
@@ -248,7 +303,7 @@ class PlanningFlow(BaseFlow):
             steps = plan_data.steps # steps是一个列表
 
             # 查找第一个未完成的步骤
-            for i, step in enumerate(steps):  # 遍历所有步骤，i是索引，step是步骤内容
+            for i, step in enumerate(steps):  # 遍历所有步骤，i是索引(从0开始)，step是步骤内容
                 # 从StepInfo对象直接获取状态
                 if step.status in PlanStepStatus.get_active_statuses():
                     # 提取步骤类型(如[SEARCH]或[CODE])
@@ -261,7 +316,7 @@ class PlanningFlow(BaseFlow):
                         "expected_output": step.expected_output,
                         "current_status": step.status,
                         "notes": step.notes, # 该步骤的备注，
-                        "type": step_type, # 新增：步骤类型，对应适配的Agent
+                        "type": step_type, # 步骤类型，对应适配的Agent
                         "actual_result":step.actual_result # 实际输出
                     }
 
@@ -287,7 +342,7 @@ class PlanningFlow(BaseFlow):
             return None, None
 
     async def _execute_step(self, executor: BaseAgent, step_info: dict) -> str:
-        """执行当前步骤
+        """读取跨步骤共享变量，执行当前步骤
         
         参数:
             executor: 执行代理
@@ -305,8 +360,9 @@ class PlanningFlow(BaseFlow):
                 logger.error(f"浏览器初始化失败: {str(e)}")
                 return f"浏览器初始化失败: {str(e)}"
 
-        # 准备计划状态上下文
-        plan_context = await self._get_plan_text()
+        # 准备跨步骤共享变量、计划文本和步骤信息
+        cur_plan_context = self.plan_context.get_step_context()
+        plan_text = await self._get_plan_text()
         step_text = step_info.get("text", f"步骤 {self.current_step_index}")
         expected_output = step_info.get("expected_output", "未定义")
 
@@ -318,8 +374,11 @@ class PlanningFlow(BaseFlow):
         3. 结果验证：必须严格对比实际结果与下列预期输出
         4. 依赖检查：确认前置步骤{self.current_step_index-1}已100%完成
 
-        << 计划上下文 >>
-        {plan_context}
+        << 跨步骤共享变量 >>
+        {cur_plan_context}
+
+        << 计划 >>
+        {plan_text}
 
         << 当前任务 >>
         ■ 步骤编号：{self.current_step_index+1}/{len(self.planning_tool.plans[self.active_plan_id].steps)}
@@ -390,6 +449,7 @@ class PlanningFlow(BaseFlow):
             plan = self.planning_tool.plans[self.active_plan_id]
             step = plan.steps[self.current_step_index]
             step.notes += f"完成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}  执行状态: {PlanStepStatus.COMPLETED.value}"
+
             # 显示进度
             logger.info(
                 f"已标记步骤 {self.current_step_index+1}/{len(self.planning_tool.plans[self.active_plan_id].steps)} 为COMPLETED"
@@ -411,7 +471,7 @@ class PlanningFlow(BaseFlow):
                 plan_data.step_statuses = step_statuses
 
     async def _update_plan_text(self, step_result: str) -> str:
-        """总结当前步骤的实际执行结果，更新并返回计划文本"""
+        """总结当前步骤的实际执行结果，更新后同步到GlobalMemory并返回计划文本"""
         try:
             plan_data = self.planning_tool.plans[self.active_plan_id] # plan_data是一个字典
             steps = plan_data.steps # 字典的 get() 方法安全获取键的对应值，steps是一个列表，元素为StepInfo对象
@@ -456,6 +516,8 @@ class PlanningFlow(BaseFlow):
 
             # 更新步骤的实际结果
             steps[self.current_step_index].actual_result = summary_result
+            # 同步到GlobalMemory
+            self.global_memory.sync_plan(plan_data)
             # 提取更新后的完整计划
             plan_result = await self.planning_tool.execute(
                 command="get",
@@ -645,7 +707,7 @@ class PlanningFlow(BaseFlow):
                 1. 已完成工作的完成状态摘要
                 2. 各个步骤的执行情况以及与其预期结果的对比分析
                 3. 分析计划整体执行情况以及不足之处，并给出大概的可执行的简单的优化方向
-                4. 最终说明
+                4. 最终说明，判断计划是否切实完成目标，若以高标准(如100%满足用户需求)完全成功达到目标则标注出"[ ✅ SUCCESS-COMPLETED ✅ ]"
                 """
             )
 

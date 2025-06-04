@@ -29,7 +29,7 @@ class Manus(ToolCallAgent):
 
     # 执行限制参数
     max_observe: int = 10000  # 最大观察结果长度
-    max_steps: int = 20  # 最大执行步数
+    max_steps: int = 5  # 最大执行步数
 
     # MCP客户端配置，用于远程工具访问
     mcp_clients: MCPClients = Field(default_factory=MCPClients)
